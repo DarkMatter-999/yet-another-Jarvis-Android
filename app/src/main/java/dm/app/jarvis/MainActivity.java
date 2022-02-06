@@ -4,7 +4,9 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.speech.tts.TextToSpeech;
 import android.text.method.ScrollingMovementMethod;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.ToggleButton;
@@ -19,11 +21,19 @@ import org.vosk.android.SpeechStreamService;
 import org.vosk.android.StorageService;
 
 import java.io.IOException;
-import java.io.InputStream;
+import java.util.Locale;
 
 import androidx.annotation.NonNull;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+
+import okhttp3.Call;
+import okhttp3.FormBody;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
 public class MainActivity extends Activity implements
         RecognitionListener {
@@ -41,6 +51,12 @@ public class MainActivity extends Activity implements
     private SpeechService speechService;
     private SpeechStreamService speechStreamService;
     private TextView resultView;
+    private TextView finalView;
+
+    private OkHttpClient client = new OkHttpClient();
+
+    private TextToSpeech tts;
+
 
     @Override
     public void onCreate(Bundle state) {
@@ -49,13 +65,27 @@ public class MainActivity extends Activity implements
 
         // Setup layout
         resultView = findViewById(R.id.result_text);
+        finalView = findViewById(R.id.final_text);
         setUiState(STATE_START);
 
-        findViewById(R.id.recognize_file).setOnClickListener(view -> recognizeFile());
         findViewById(R.id.recognize_mic).setOnClickListener(view -> recognizeMicrophone());
         ((ToggleButton) findViewById(R.id.pause)).setOnCheckedChangeListener((view, isChecked) -> pause(isChecked));
 
         LibVosk.setLogLevel(LogLevel.INFO);
+
+        tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int i) {
+                if(i == TextToSpeech.SUCCESS){
+                    int result=tts.setLanguage(Locale.getDefault());
+                    if(result==TextToSpeech.LANG_MISSING_DATA ||
+                            result==TextToSpeech.LANG_NOT_SUPPORTED){
+                        //Log.e("error", "This Language is not supported");
+                    }
+                }
+                //Log.e("error", "Initilization Failed!");
+            }
+        });
 
         // Check if user has given permission to record audio, init the model after permission is granted
         int permissionCheck = ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.RECORD_AUDIO);
@@ -104,16 +134,57 @@ public class MainActivity extends Activity implements
         if (speechStreamService != null) {
             speechStreamService.stop();
         }
+
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+        }
     }
 
     @Override
     public void onResult(String hypothesis) {
+
+        final String[] responseFinal = {""};
+
+        Thread thread = new Thread(() -> {
+            try  {
+                MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+                RequestBody formBody = RequestBody.create(JSON, hypothesis);
+
+                Request request = new Request.Builder()
+                        .url("http://192.168.42.75:9999/speech")
+                        .addHeader("Content-Type", " application/json")
+                        .post(formBody)
+                        .build();
+
+                Call call = client.newCall(request);
+                Response response = call.execute();
+
+                responseFinal[0] = response.body().string();
+
+                finalView.setText(responseFinal[0]);
+                tts.speak(responseFinal[0], TextToSpeech.QUEUE_FLUSH, null, null);
+
+                while (tts.isSpeaking()) {
+                    speechService.setPause(true);
+                }
+                speechService.setPause(false);
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+
+        thread.start();
+        //finalView.setText(responseFinal[0]);
         resultView.append(hypothesis + "\n");
+        //resultView.append(hypothesis + "\n");
     }
 
     @Override
     public void onFinalResult(String hypothesis) {
-        resultView.append(hypothesis + "\n");
+
+        resultView.setText(hypothesis + "\n");
         setUiState(STATE_DONE);
         if (speechStreamService != null) {
             speechStreamService = null;
@@ -140,35 +211,23 @@ public class MainActivity extends Activity implements
             case STATE_START:
                 resultView.setText(R.string.preparing);
                 resultView.setMovementMethod(new ScrollingMovementMethod());
-                findViewById(R.id.recognize_file).setEnabled(false);
                 findViewById(R.id.recognize_mic).setEnabled(false);
                 findViewById(R.id.pause).setEnabled((false));
                 break;
             case STATE_READY:
                 resultView.setText(R.string.ready);
                 ((Button) findViewById(R.id.recognize_mic)).setText(R.string.recognize_microphone);
-                findViewById(R.id.recognize_file).setEnabled(true);
                 findViewById(R.id.recognize_mic).setEnabled(true);
                 findViewById(R.id.pause).setEnabled((false));
                 break;
             case STATE_DONE:
-                ((Button) findViewById(R.id.recognize_file)).setText(R.string.recognize_file);
                 ((Button) findViewById(R.id.recognize_mic)).setText(R.string.recognize_microphone);
-                findViewById(R.id.recognize_file).setEnabled(true);
                 findViewById(R.id.recognize_mic).setEnabled(true);
-                findViewById(R.id.pause).setEnabled((false));
-                break;
-            case STATE_FILE:
-                ((Button) findViewById(R.id.recognize_file)).setText(R.string.stop_file);
-                resultView.setText(getString(R.string.starting));
-                findViewById(R.id.recognize_mic).setEnabled(false);
-                findViewById(R.id.recognize_file).setEnabled(true);
                 findViewById(R.id.pause).setEnabled((false));
                 break;
             case STATE_MIC:
                 ((Button) findViewById(R.id.recognize_mic)).setText(R.string.stop_microphone);
                 resultView.setText(getString(R.string.say_something));
-                findViewById(R.id.recognize_file).setEnabled(false);
                 findViewById(R.id.recognize_mic).setEnabled(true);
                 findViewById(R.id.pause).setEnabled((true));
                 break;
@@ -180,31 +239,7 @@ public class MainActivity extends Activity implements
     private void setErrorState(String message) {
         resultView.setText(message);
         ((Button) findViewById(R.id.recognize_mic)).setText(R.string.recognize_microphone);
-        findViewById(R.id.recognize_file).setEnabled(false);
         findViewById(R.id.recognize_mic).setEnabled(false);
-    }
-
-    private void recognizeFile() {
-        if (speechStreamService != null) {
-            setUiState(STATE_DONE);
-            speechStreamService.stop();
-            speechStreamService = null;
-        } else {
-            setUiState(STATE_FILE);
-            try {
-                Recognizer rec = new Recognizer(model, 16000.f, "[\"one zero zero zero one\", " +
-                        "\"oh zero one two three four five six seven eight nine\", \"[unk]\"]");
-
-                InputStream ais = getAssets().open(
-                        "10001-90210-01803.wav");
-                if (ais.skip(44) != 44) throw new IOException("File too short");
-
-                speechStreamService = new SpeechStreamService(rec, ais, 16000);
-                speechStreamService.start(this);
-            } catch (IOException e) {
-                setErrorState(e.getMessage());
-            }
-        }
     }
 
     private void recognizeMicrophone() {

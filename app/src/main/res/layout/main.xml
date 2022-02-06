@@ -4,11 +4,6 @@
     android:layout_height="fill_parent"
     android:orientation="vertical"
     android:padding="16dp">
-    <Button
-        android:id="@+id/recognize_file"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/recognize_file"/>
 
     <Button
         android:id="@+id/recognize_mic"
@@ -24,9 +19,17 @@
         android:textOn="@string/continueRecognition"/>
 
     <TextView
+        android:id="@+id/final_text"
+        android:layout_width="match_parent"
+        android:layout_height="63dp"
+        android:gravity="bottom"
+        android:scrollbars="vertical"
+        android:textAppearance="?android:attr/textAppearanceMedium" />
+
+    <TextView
         android:id="@+id/result_text"
         android:layout_width="fill_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="430dp"
         android:gravity="bottom"
         android:scrollbars="vertical"
         android:textAppearance="?android:attr/textAppearanceMedium" />
